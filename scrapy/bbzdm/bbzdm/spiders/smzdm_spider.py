@@ -18,12 +18,13 @@ import ConfigParser
 from scrapy import log
 from scrapy.http import Request, FormRequest, Headers
 from scrapy.contrib.spiders import CrawlSpider, Rule
-from scrapy_webdriver.http import WebdriverRequest
+from scrapy_webdriver.http import WebdriverRequest, WebdriverActionRequest
 from scrapy_webdriver.selector import WebdriverXPathSelector
 
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
 
 import items
 
@@ -86,8 +87,13 @@ class SmzdmSpider(CrawlSpider):
 
         log.msg("Start requests", level=log.INFO, spider=SmzdmSpider)
         # CrawlSpider.start_requests(self)
+
+        log.msg("Login Amazon", level=log.INFO, spider=SmzdmSpider)
+        WebdriverRequest('https://www.amazon.cn/ap/signin?_encoding=UTF8&openid.assoc_handle=cnflex&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.mode=checkid_setup&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.ns.pape=http%3A%2F%2Fspecs.openid.net%2Fextensions%2Fpape%2F1.0&openid.pape.max_auth_age=0&openid.return_to=https%3A%2F%2Fwww.amazon.cn%2F%3Fie%3DUTF8%26ref_%3Dnav_ya_signin', callback=self.submit_login_info)
+        log.msg("Login Amazon success", level=log.INFO, spider=SmzdmSpider)
+        time.sleep(10)
+
         for (category, urls) in smzdm_config.items("category"):
-            break
             if category == "all_post":
                 for url in urls.split(","):
                     for page_num in range(1700, 1800):
@@ -98,10 +104,7 @@ class SmzdmSpider(CrawlSpider):
                     yield WebdriverRequest(url, meta={'category': category}, callback=self.parse_smzdm_list_page)
 
         # yield WebdriverRequest('http://post.smzdm.com/p/306042/', meta={'category': 'all_post'}, callback=self.parse_smzdm_post_page)
-        log.msg("Login Amazon", level=log.INFO, spider=SmzdmSpider)
-        yield WebdriverRequest('http://associates.amazon.cn/gp/associates/network/main.html', callback=self.submit_login_info)
-        log.msg("Login Amazon success", level=log.INFO, spider=SmzdmSpider)
-        yield WebdriverRequest('http://www.smzdm.com/p/6009011/', meta={'category': 'lego'}, callback=self.parse_smzdm_item_page)
+        # yield WebdriverRequest('http://www.smzdm.com/p/6009641/', meta={'category': 'lego'}, callback=self.parse_smzdm_item_page)
         # yield WebdriverRequest('http://haitao.smzdm.com/p/318307', meta={'category': 'camera'}, callback=self.parse_smzdm_item_page)
 
     def login(self):
@@ -112,8 +115,8 @@ class SmzdmSpider(CrawlSpider):
         sel.select('//*[@id="ap_email"]')[0].send_keys(self.formdata["email"])
         sel.select('//*[@id="ap_password"]')[0].send_keys(self.formdata["password"])
         sel.select('//*[@id="signInSubmit"]')[0].click()
-        time.sleep(1)
         self.check_login(response)
+        time.sleep(1)
 
     def check_login(self, response):
         self.download_page(response, "after_login.html")
@@ -133,12 +136,10 @@ class SmzdmSpider(CrawlSpider):
                 yield WebdriverRequest(item_url, meta={'category': category}, callback=self.parse_smzdm_item_page)
                 # else:
                 #     raise StopIteration
-                break
             next_page_xpath = "//li[@class='pagedown']/a/@href"
             next_page_url_sel_list = sel.select(next_page_xpath)
             for next_page_url_sel in next_page_url_sel_list:
                 next_page_url = next_page_url_sel.extract()
-                break
                 yield WebdriverRequest(next_page_url, meta={'category': category}, callback=self.parse_smzdm_list_page)
         except:
             traceback.print_exc()
@@ -168,7 +169,7 @@ class SmzdmSpider(CrawlSpider):
             if len(item_shopping_url_sel_list):
                 item_shopping_url = item_shopping_url_sel_list[0].extract()
                 if item_shopping_url not in self.urls_seen:
-                    yield WebdriverRequest(item_shopping_url, meta={'referer': response.url}, callback=self.parse_shopping_item_page)
+                    yield WebdriverRequest(item_shopping_url, meta={'referer': response.url, "target_price":price}, callback=self.parse_shopping_item_page)
             else:
                 log.msg("Smzdm shopping url parse failed:\t[%s]" % (response.url) , level=log.ERROR, spider=SmzdmSpider)
                 raise StopIteration
@@ -214,6 +215,7 @@ class SmzdmSpider(CrawlSpider):
         try:
             sel = WebdriverXPathSelector(response)
             referer = response.meta["referer"]
+            target_price = response.meta["target_price"]
             jd_jump_url_sel = sel.select("/html/body/div[5]/div/div/div[1]/div[2]/div[3]/a/@href")
             if jd_jump_url_sel:
                 log.msg("JD jump url:\t[%s]" % (jd_jump_url_sel[0].extract()) , level=log.DEBUG, spider=SmzdmSpider)
@@ -230,6 +232,9 @@ class SmzdmSpider(CrawlSpider):
                 log.msg("Real shopping url: %s" % (response.webdriver.current_url), level=log.DEBUG, spider=SmzdmSpider)
                 url = response.webdriver.current_url
                 hostname = urlparse(url).hostname
+                if hostname != "www.amazon.cn":
+                    log.msg("Shopping robot does not support this site", level=log.INFO, spider=SmzdmSpider)
+                    return
                 for url_pattern, (title_xpath, price_xpath, price_redudant_pattern, description_xpath, description_img_xpath, currency, title_img_xpath_list, comment_xpath, vote_count_xpath, vote_score_xpath) in self.__url_pattern_xpath_dict.items():
                     if url_pattern.match(url):
                         log.msg("Shopping url pattern is found", level=log.DEBUG, spider=SmzdmSpider)
@@ -248,6 +253,9 @@ class SmzdmSpider(CrawlSpider):
                                 price = float(price_text)
                                 if url.startswith("http://www.kiddies24.de"):
                                     price /= 100
+                                if (price - target_price) / target_price > 0.05:
+                                    log.msg("Price is not ideal. (current price: %f, target price: %f)" % (price, target_price), level=log.INFO, spider=SmzdmSpider)
+                                    return
                             except:
                                 traceback.print_exc()
                                 log.msg("Shopping page error:\tThis item is sold out, the price is %s" % (price), level=log.WARNING, spider=SmzdmSpider)
@@ -284,10 +292,50 @@ class SmzdmSpider(CrawlSpider):
                         yield items.ShoppingItem(title=title, price=price, url=url, referer=referer, image_urls=img_src_list, \
                                 title_image_url=title_img_src, description=description, currency=currency, \
                                 comment_list=comment_list, vote_count=vote_count, vote_score=vote_score)
+                        log.msg("Place the order!", level=log.INFO, spider=SmzdmSpider)
+
+                        sel = WebdriverXPathSelector(response)
+                        one_click_button_list = sel.select('//*[@id="one-click-button"]')
+                        if not one_click_button_list:
+                            log.msg("Need to enable one click order!", level=log.DEBUG, spider=SmzdmSpider)
+                            referer = response.meta["referer"]
+                            enable_one_click_url_sel = response.webdriver.find_elements_by_xpath('//*[@id="oneClickSignIn"]')
+                            if enable_one_click_url_sel:
+                                # enable_one_click_url = enable_one_click_url_sel[0].extract()
+                                log.msg("Enable one click order", level=log.DEBUG, spider=SmzdmSpider)
+                                # enable_one_click_url_sel[0].click()
+                                yield WebdriverActionRequest(response, \
+                                        actions=ActionChains(response.webdriver).click(enable_one_click_url_sel[0]), \
+                                        meta={'referer': referer}, \
+                                        callback=self.parse_shopping_item_page)
+                        else:
+                            log.msg("One click order!", level=log.INFO, spider=SmzdmSpider)
+                            one_click_button_list[0].click()
+
+                        # self.order_item(response)
+                        # time.sleep(1)
         except:
             traceback.print_exc()
             log.msg("Shopping item page parse failed:\t[%s]" % (response.url) , level=log.ERROR, spider=SmzdmSpider)
             raise StopIteration
+
+    def order_item(self, response):
+        sel = WebdriverXPathSelector(response)
+        one_click_button_list = sel.select('//*[@id="one-click-button"]')
+        if not one_click_button_list:
+            log.msg("Need to enable one click order!", level=log.DEBUG, spider=SmzdmSpider)
+            referer = response.meta["referer"]
+            enable_one_click_url_sel = sel.select('//*[@id="oneClickSignIn"]/a/span')
+            if enable_one_click_url_sel:
+                # enable_one_click_url = enable_one_click_url_sel[0].extract()
+                log.msg("Enable one click order", level=log.DEBUG, spider=SmzdmSpider)
+                enable_one_click_url_sel[0].click()
+                WebdriverActionRequest(response, \
+                        actions=ActionChains(response.webdriver).click(enable_one_click_url_sel[0]), \
+                        callback=self.parse_shopping_item_page)
+        else:
+            log.msg("One click order!", level=log.INFO, spider=SmzdmSpider)
+            one_click_button_list[0].click()
 
     def parse_price(self, attachment):
         price = 0.0
